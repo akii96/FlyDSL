@@ -1584,6 +1584,8 @@ def _make_dualwave_swp_traits(
         if page_size < block_n or page_size % block_n != 0:
             raise ValueError(f"paged page_size must be a positive multiple of {block_n}, got {page_size}")
         tiles_per_page = page_size // block_n
+        if tiles_per_page > 1 and kv_cache_layout != "linear":
+            raise ValueError(f"page_size {page_size} > {block_n} requires the linear KV cache layout")
     else:
         page_size = 0
         tiles_per_page = 1

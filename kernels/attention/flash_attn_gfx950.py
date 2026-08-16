@@ -74,7 +74,8 @@ def build_flash_attn_dualwave_swp_module(
 
     Supports dense self-attention, varlen packed QKV, and paged-KV cache modes.
     Varlen uses cu_seqlens_q/kv with per-batch self-attention ranges.
-    Paged mode keeps Q/O dense and maps KV tiles through BlockTable pages.
+    Paged mode keeps Q/O dense and maps KV tiles through BlockTable pages;
+    ``page_size`` defaults to the kernel's BLOCK_N and may be any multiple of it.
     Varlen, paged, and split-K are mutually constrained by the caller."""
     gpu_arch = get_hip_arch()
 
