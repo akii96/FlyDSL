@@ -307,6 +307,7 @@ def _build_paged(
     varlen: bool = False,
     kv_cache_layout: str = "linear",
     causal_lpt: bool = True,
+    page_size: int = 64,
     return_lse: bool = False,
 ):
     """Build (and cache) a paged-KV launcher (gfx950 DUALWAVE_SWP, paged=True).
@@ -321,6 +322,9 @@ def _build_paged(
 
     ``kv_cache_layout`` selects the physical page layout: "linear"
     [NumBlocks,PageSize,Hkv,D] or "vectorized" (aiter 5D).
+
+    ``page_size`` is the token count per page; pages larger than the 64-token KV tile
+    are walked tile by tile.
     """
     from kernels.attention.flash_attn_gfx950 import build_flash_attn_dualwave_swp_module
 
@@ -341,15 +345,38 @@ def _build_paged(
         dualwave_swp_setprio=setprio,
         dualwave_swp_enable_stagger=enable_stagger,
         causal_lpt=causal_lpt,
+        page_size=page_size,
         return_lse=return_lse,
     )
 
 
 # ── paged-KV native path ────────────────────────────────────────────────────
 
-# gfx950 dualwave paged-KV currently supports exactly one configuration.
-_PAGED_PAGE_SIZE = 64
+# KV tile length the dualwave pipeline consumes per step; a page holds one or more.
+_PAGED_TILE = 64
+_PAGED_PAGE_SIZES = (64, 128)
+# Block-table entries (one per KV tile) staged in LDS per split.
 _PAGED_BT_LDS_SIZE = 2048
+
+
+def _paged_kv_row_stride(k, v, page_size, num_kv_heads, head_dim):
+    """Element stride between KV rows of a [NumBlocks, PageSize, Hkv, D] page cache.
+
+    None means "densely packed", and the kernel falls back to its Hkv*D default. vLLM
+    hands K and V in as views into one packed cache entry, so a row is wider than
+    Hkv*D; the kernel can take that stride at runtime as long as pages remain
+    page_size rows apart and each row is contiguous over [Hkv, D]. Layouts that do
+    not fit are reported as dense and get copied by the caller, as before.
+    """
+    if k.stride() != v.stride():
+        return None
+    block_stride, row_stride, head_stride, elem_stride = (int(s) for s in k.stride())
+    dense_row = num_kv_heads * head_dim
+    if elem_stride != 1 or head_stride != head_dim or row_stride < dense_row:
+        return None
+    if block_stride != page_size * row_stride:
+        return None
+    return None if row_stride == dense_row else row_stride
 
 
 def _flydsl_flash_attn_paged(
@@ -379,9 +406,9 @@ def _flydsl_flash_attn_paged(
 ) -> torch.Tensor:
     """Native paged-KV attention on the gfx950 dualwave kernel.
 
-    Supported config ONLY (anything else raises): linear/vectorized cache layout
-    [NumBlocks, PageSize=64, NumKVHeads, HeadDim], vLLM lookup (block_table +
-    seqlen_k), causal, D=64/128, dtype bf16/f16.
+    Supported config ONLY (anything else raises): linear (page_size 64 or 128) or
+    vectorized (page_size 64) cache layout [NumBlocks, PageSize, NumKVHeads, HeadDim],
+    vLLM lookup (block_table + seqlen_k), causal, D=64/128, dtype bf16/f16.
     - Dense 4D Q ``[B, Sq, H, D]``: split-K (num_kv_splits>1) supported (seq_len>=384).
     - Varlen packed Q ``[total_q, H, D]`` (cu_seqlens_q given): paged K/V looked up
       per kv-tile via block_table; split-K not supported (matches dense varlen).
@@ -434,9 +461,13 @@ def _flydsl_flash_attn_paged(
         page_size = int(k.shape[1])
         Hkv = int(k.shape[2])
         k_head_dim = int(k.shape[3])
-    if page_size != _PAGED_PAGE_SIZE:
+    if vectorized and page_size != _PAGED_TILE:
         raise NotImplementedError(
-            f"flydsl_flash_attn_func: native paged KV supports page_size={_PAGED_PAGE_SIZE} only, got {page_size}"
+            f"flydsl_flash_attn_func: vectorized paged KV supports page_size={_PAGED_TILE} only, got {page_size}"
+        )
+    if page_size not in _PAGED_PAGE_SIZES:
+        raise NotImplementedError(
+            f"flydsl_flash_attn_func: native paged KV supports page_size in {_PAGED_PAGE_SIZES}, got {page_size}"
         )
     if D not in (64, 128):
         raise NotImplementedError(f"flydsl_flash_attn_func: native paged KV supports head_dim=64 or 128, got {D}")
@@ -461,15 +492,17 @@ def _flydsl_flash_attn_paged(
     # Per-batch KV lengths differ in general → bottom-right cross-length masking. Varlen
     # paged always uses cross masking (per-batch seqlen_q/seqlen_kv come from cu_seqlens).
     skv = int(max_seqlen_kv) if max_seqlen_kv is not None else int(seqlen_k.max().item())
-    max_kv_pages = (skv + page_size - 1) // page_size
-    max_pages_per_split = (max_kv_pages + int(num_kv_splits) - 1) // int(num_kv_splits)
-    if max_pages_per_split > _PAGED_BT_LDS_SIZE:
-        max_supported_kv = _PAGED_BT_LDS_SIZE * int(num_kv_splits) * page_size
+    # The staged block table is indexed per KV tile, not per page.
+    max_kv_tiles = (skv + _PAGED_TILE - 1) // _PAGED_TILE
+    max_tiles_per_split = (max_kv_tiles + int(num_kv_splits) - 1) // int(num_kv_splits)
+    if max_tiles_per_split > _PAGED_BT_LDS_SIZE:
+        max_supported_kv = _PAGED_BT_LDS_SIZE * int(num_kv_splits) * _PAGED_TILE
         raise NotImplementedError(
             f"flydsl_flash_attn_func: paged KV length {skv} exceeds block-table LDS window "
-            f"({_PAGED_BT_LDS_SIZE} pages/split, max_kv_len={max_supported_kv} for "
-            f"num_kv_splits={num_kv_splits}, page_size={page_size})"
+            f"({_PAGED_BT_LDS_SIZE} tiles/split, max_kv_len={max_supported_kv} for "
+            f"num_kv_splits={num_kv_splits})"
         )
+    stride_kv_n = None if vectorized else _paged_kv_row_stride(k, v, page_size, Hkv, D)
     if varlen:
         cross = bool(cross_seqlen) if cross_seqlen is not None else True
     else:
@@ -484,8 +517,11 @@ def _flydsl_flash_attn_paged(
         launch_stream = torch.cuda.current_stream(q.device) if stream is None else stream
         # Short paged attention uses generic light; unsupported cases stay on dualwave.
         _arch = _gpu_arch(q.device)
+        # The generic light kernel assumes one KV tile per densely packed page.
         _paged_light_ok = (
             (num_kv_splits <= 1)
+            and page_size == _PAGED_TILE
+            and stride_kv_n is None
             and D in (64, 128)
             and dtype_str in ("bf16", "f16")
             and (not _arch.startswith("gfx950") or Sq <= _VARLEN_LIGHT_MAX_SEQ)
@@ -524,16 +560,21 @@ def _flydsl_flash_attn_paged(
                 varlen=varlen,
                 kv_cache_layout=kv_cache_layout,
                 causal_lpt=causal_lpt,
+                page_size=page_size,
             )
         if out is None:
             out = torch.empty_like(q)
         # Keep tensors in natural shape; flattening can overflow int32 C-ABI dims.
         # The paged kernel rebuilds per-batch/page descriptors from base pointers.
         q_flat = q.contiguous()
-        k_flat = k.contiguous()
-        v_flat = v.contiguous()
+        # A strided cache is already in a layout the kernel addresses directly;
+        # copying it would both cost a cache-sized memcpy and drop the K/V interleave.
+        k_flat = k if stride_kv_n is not None else k.contiguous()
+        v_flat = v if stride_kv_n is not None else v.contiguous()
         o_flat = out.contiguous()
         kwargs = dict(block_table=block_table_i32, block_table_stride=block_table_stride, stream=launch_stream)
+        if stride_kv_n is not None:
+            kwargs["stride_kv_n"] = stride_kv_n
         if varlen:
             kwargs["cu_seqlens_q"] = cu_seqlens_q
             kwargs["cu_seqlens_kv"] = cu_seqlens_kv
@@ -651,7 +692,9 @@ def flydsl_flash_attn_func(
         v: Value tensor, same shape as k.
            Paged KV cache (future ABI): physical K/V cache tensors. Supported
            ``kv_cache_layout`` values:
-           - ``linear``: 4D paged K/V, ``[NumBlocks, PageSize, NumKVHeads, HeadDim]``.
+           - ``linear``: 4D paged K/V, ``[NumBlocks, PageSize, NumKVHeads, HeadDim]``,
+             page_size 64 or 128. K/V may be views into a wider packed cache row as
+             long as pages stay ``PageSize`` rows apart.
            - ``linear3d``: page_size=1 special case,
              ``[NumBlocks, NumKVHeads, HeadDim]``.
            - ``vectorized``: aiter-style 5D K/V, where
