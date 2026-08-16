@@ -3585,6 +3585,42 @@ def test_paged_strided_kv_matches_contiguous(page_size):
 
 
 @_requires_gfx950
+@pytest.mark.parametrize("page_size", [64, 128])
+def test_paged_vllm_cache_view(page_size):
+    """vLLM's cache is [NumBlocks, Hkv, PageSize, 2*D] split into two K/V views.
+
+    Its head stride is PageSize*2*D rather than D, which the kernel only reads
+    with more than one KV head, so the single-head case must run in place.
+    """
+    B, S, H, D = 2, 1024, 8, 128
+    torch.manual_seed(page_size)
+    q = _rand_lse(B, S, H, D, dtype=torch.bfloat16)
+    k = _rand_lse(B, S, 1, D, dtype=torch.bfloat16)
+    v = torch.randn_like(k)
+
+    num_pages = B * (S // page_size)
+    cache = torch.empty(num_pages, 1, page_size, 2 * D, dtype=k.dtype, device=k.device)
+    k_cache, v_cache = cache.transpose(1, 2).split(D, dim=-1)
+    block_table = torch.randperm(num_pages, device=k.device).view(B, -1).to(torch.int32)
+    pages = block_table.reshape(-1).long()
+    k_cache[pages] = k.reshape(num_pages, page_size, 1, D)
+    v_cache[pages] = v.reshape(num_pages, page_size, 1, D)
+
+    ref = flydsl_flash_attn_func(q, k, v, causal=True)
+    out = flydsl_flash_attn_func(
+        q,
+        k_cache,
+        v_cache,
+        causal=True,
+        block_table=block_table,
+        seqlen_k=torch.full((B,), S, dtype=torch.int32, device=q.device),
+        max_seqlen_kv=S,
+    )
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, ref, atol=2e-2, rtol=1e-2)
+
+
+@_requires_gfx950
 def test_paged_rejects_unsupported_page_size():
     B, S, H, Hkv, D = 1, 512, 8, 2, 128
     q = _rand_lse(B, S, H, D, dtype=torch.bfloat16)

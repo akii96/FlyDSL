@@ -365,16 +365,18 @@ def _paged_kv_row_stride(k, v, page_size, num_kv_heads, head_dim):
     None means "densely packed", and the kernel falls back to its Hkv*D default. vLLM
     hands K and V in as views into one packed cache entry, so a row is wider than
     Hkv*D; the kernel can take that stride at runtime as long as pages remain
-    page_size rows apart and each row is contiguous over [Hkv, D]. Layouts that do
-    not fit are reported as dense and get copied by the caller, as before.
+    page_size rows apart. The head stride is baked to D and only read when there is
+    more than one KV head, so a single-head cache is free to space its heads however
+    it likes. Layouts that do not fit are reported as dense and get copied by the
+    caller, as before.
     """
     if k.stride() != v.stride():
         return None
     block_stride, row_stride, head_stride, elem_stride = (int(s) for s in k.stride())
     dense_row = num_kv_heads * head_dim
-    if elem_stride != 1 or head_stride != head_dim or row_stride < dense_row:
+    if elem_stride != 1 or row_stride < dense_row or block_stride != page_size * row_stride:
         return None
-    if block_stride != page_size * row_stride:
+    if num_kv_heads > 1 and head_stride != head_dim:
         return None
     return None if row_stride == dense_row else row_stride
 
