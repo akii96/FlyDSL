@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "updated": "2026-08-22T21:34:30Z",
+ "updated": "2026-08-23T01:06:48Z",
  "repo": "akii96/FlyDSL",
  "runs": [
   {
@@ -10,11 +10,11 @@
    "branch": "main",
    "event": "push",
    "title": "[Fix] crd2idx uses wrong dynamic basis leaf (#1052)",
-   "status": "queued",
-   "conclusion": null,
+   "status": "completed",
+   "conclusion": "cancelled",
    "url": "https://github.com/akii96/FlyDSL/actions/runs/32542421460",
    "created_at": "2026-08-22T01:05:59Z",
-   "updated_at": "2026-08-22T01:06:38Z",
+   "updated_at": "2026-08-23T01:06:39Z",
    "actor": "akii96",
    "jobs": []
   }
