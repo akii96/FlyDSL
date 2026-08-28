@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "updated": "2026-08-28T05:51:15Z",
+ "updated": "2026-08-28T15:18:29Z",
  "repo": "akii96/FlyDSL",
  "runs": [
   {
@@ -10,11 +10,11 @@
    "branch": "main",
    "event": "push",
    "title": "[CI] Add MI35x runners for validation tests (#1075)",
-   "status": "in_progress",
+   "status": "queued",
    "conclusion": null,
    "url": "https://github.com/akii96/FlyDSL/actions/runs/33146010512",
    "created_at": "2026-08-28T05:51:02Z",
-   "updated_at": "2026-08-28T05:51:06Z",
+   "updated_at": "2026-08-28T05:51:43Z",
    "actor": "akii96",
    "jobs": []
   },
