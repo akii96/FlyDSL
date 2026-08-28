@@ -1,8 +1,23 @@
 {
  "schema": 1,
- "updated": "2026-08-28T00:24:13Z",
+ "updated": "2026-08-28T05:51:15Z",
  "repo": "akii96/FlyDSL",
  "runs": [
+  {
+   "run_id": 33146010512,
+   "pr": null,
+   "commit": "3c40cd39243aa2f7c9e69a5aa7e25931f841ab2d",
+   "branch": "main",
+   "event": "push",
+   "title": "[CI] Add MI35x runners for validation tests (#1075)",
+   "status": "in_progress",
+   "conclusion": null,
+   "url": "https://github.com/akii96/FlyDSL/actions/runs/33146010512",
+   "created_at": "2026-08-28T05:51:02Z",
+   "updated_at": "2026-08-28T05:51:06Z",
+   "actor": "akii96",
+   "jobs": []
+  },
   {
    "run_id": 33051958993,
    "pr": null,
@@ -10,11 +25,11 @@
    "branch": "main",
    "event": "push",
    "title": "[Bugfix][PA] Fix D192 query staging and 64-bit cache offsets (#1064)",
-   "status": "queued",
-   "conclusion": null,
+   "status": "completed",
+   "conclusion": "cancelled",
    "url": "https://github.com/akii96/FlyDSL/actions/runs/33051958993",
    "created_at": "2026-08-27T07:58:17Z",
-   "updated_at": "2026-08-27T07:58:57Z",
+   "updated_at": "2026-08-28T05:51:04Z",
    "actor": "akii96",
    "jobs": []
   },
