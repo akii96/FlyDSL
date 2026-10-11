@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "updated": "2026-10-11T05:41:57Z",
+ "updated": "2026-10-11T06:17:59Z",
  "repo": "akii96/FlyDSL",
  "runs": [
   {
@@ -10,11 +10,11 @@
    "branch": "main",
    "event": "push",
    "title": "[Perf] Tile GLM MXFP4 scales and pair gate/up rows (#1241)",
-   "status": "queued",
-   "conclusion": null,
+   "status": "completed",
+   "conclusion": "cancelled",
    "url": "https://github.com/akii96/FlyDSL/actions/runs/38030399350",
    "created_at": "2026-10-10T06:17:07Z",
-   "updated_at": "2026-10-10T06:17:48Z",
+   "updated_at": "2026-10-11T06:17:49Z",
    "actor": "akii96",
    "jobs": []
   },
